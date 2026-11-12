@@ -32,6 +32,13 @@ final class TerminalEmulator {
     private(set) var appCursorKeys = false
     private(set) var bracketedPaste = false
     private(set) var isAlternateScreen = false
+    /// The program asked for mouse events (DEC modes 1000/1002/1003).
+    private(set) var mouseReporting = false
+    /// Mouse events should use SGR encoding (DEC mode 1006).
+    private(set) var sgrMouse = false
+    /// Running total of lines ever pushed into scrollback (survives trimming),
+    /// so a scrolled-back view can stay put while new output arrives.
+    private(set) var scrollbackPushCount = 0
     private(set) var title = ""
 
     /// Bytes the terminal must send back to the program (e.g. cursor position reports).
@@ -273,6 +280,7 @@ final class TerminalEmulator {
 
     private func appendScrollback(_ line: [Cell]) {
         scrollback.append(line)
+        scrollbackPushCount += 1
         if scrollback.count > maxScrollback { scrollback.removeFirst(scrollback.count - maxScrollback) }
     }
 
@@ -317,6 +325,7 @@ final class TerminalEmulator {
         cursorX = 0; cursorY = 0
         scrollTop = 0; scrollBottom = rows - 1
         cursorVisible = true; appCursorKeys = false; bracketedPaste = false; autowrap = true
+        mouseReporting = false; sgrMouse = false
         isAlternateScreen = false; savedPrimary = nil
     }
 
@@ -460,6 +469,8 @@ final class TerminalEmulator {
             case 1048: on ? saveCursor() : restoreCursor()
             case 1049:
                 if on { saveCursor(); setAlternateScreen(true) } else { setAlternateScreen(false); restoreCursor() }
+            case 1000, 1002, 1003: mouseReporting = on
+            case 1006: sgrMouse = on
             case 2004: bracketedPaste = on
             default: break
             }
