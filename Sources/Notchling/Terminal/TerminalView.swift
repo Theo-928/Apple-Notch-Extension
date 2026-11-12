@@ -17,6 +17,7 @@ final class TerminalView: NSView {
     /// Lines scrolled back into history (0 = live view).
     private var scrollOffset = 0
     private var scrollAccumulator: CGFloat = 0
+    private var lastPushCount = 0
     /// Selection in absolute line coordinates (scrollback + screen).
     private var selectionAnchor: (line: Int, col: Int)?
     private var selectionEnd: (line: Int, col: Int)?
@@ -76,8 +77,15 @@ final class TerminalView: NSView {
     }
 
     func outputArrived() {
-        scrollOffset = 0
-        selectionAnchor = nil; selectionEnd = nil
+        let pushed = emulator.scrollbackPushCount - lastPushCount
+        lastPushCount = emulator.scrollbackPushCount
+        if scrollOffset > 0 {
+            // Stay on the history the user scrolled to instead of snapping back to the bottom
+            // (busy programs like spinners or `claude` print constantly).
+            scrollOffset = min(emulator.scrollback.count, scrollOffset + pushed)
+        } else {
+            selectionAnchor = nil; selectionEnd = nil
+        }
         needsDisplay = true
     }
 
@@ -259,21 +267,44 @@ final class TerminalView: NSView {
     // MARK: Scrolling
 
     override func scrollWheel(with event: NSEvent) {
-        guard !emulator.isAlternateScreen else {
-            // Full-screen apps get arrow keys instead, like Terminal.app.
-            let lines = Int(abs(event.scrollingDeltaY) / 6)
-            if lines > 0 {
-                let key = event.scrollingDeltaY > 0 ? "A" : "B"
-                let prefix = emulator.appCursorKeys ? "\u{1B}O" : "\u{1B}["
-                sendBytes(Array(String(repeating: prefix + key, count: min(lines, 5)).utf8))
-            }
-            return
-        }
-        scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / cellHeight : event.scrollingDeltaY
+        if event.phase == .began || event.phase == .mayBegin { scrollAccumulator = 0 }
+        // Trackpads report points; mouse wheels report roughly one unit per notch.
+        scrollAccumulator += event.hasPreciseScrollingDeltas
+            ? event.scrollingDeltaY / cellHeight
+            : event.scrollingDeltaY * 3
         let delta = Int(scrollAccumulator)
         guard delta != 0 else { return }
         scrollAccumulator -= CGFloat(delta)
-        scrollOffset = max(0, min(emulator.scrollback.count, scrollOffset + delta))
+        let steps = min(abs(delta), 10)
+        let up = delta > 0
+
+        if emulator.mouseReporting {
+            // The program handles the mouse itself (e.g. vim with mouse=a, tmux, htop):
+            // send wheel button presses at the pointer position.
+            let p = convert(event.locationInWindow, from: nil)
+            let row = max(0, min(emulator.rows - 1, Int((p.y - padding) / cellHeight))) + 1
+            let col = max(0, min(emulator.cols - 1, Int((p.x - padding) / cellWidth))) + 1
+            let button = up ? 64 : 65
+            let one: [UInt8]
+            if emulator.sgrMouse {
+                one = Array("\u{1B}[<\(button);\(col);\(row)M".utf8)
+            } else {
+                one = [0x1B, 0x5B, 0x4D, UInt8(32 + button), UInt8(min(255, 32 + col)), UInt8(min(255, 32 + row))]
+            }
+            sendBytes(Array((0..<steps).map { _ in one }.joined()))
+            return
+        }
+
+        if emulator.isAlternateScreen {
+            // Full-screen apps without mouse support get arrow keys instead, like Terminal.app.
+            let prefix = emulator.appCursorKeys ? "\u{1B}O" : "\u{1B}["
+            sendBytes(Array(String(repeating: prefix + (up ? "A" : "B"), count: steps).utf8))
+            return
+        }
+
+        let newOffset = max(0, min(emulator.scrollback.count, scrollOffset + delta))
+        guard newOffset != scrollOffset else { return }
+        scrollOffset = newOffset
         needsDisplay = true
     }
 
@@ -293,6 +324,8 @@ final class TerminalView: NSView {
             return true
         case "k":
             emulator.clearScrollback()
+            scrollOffset = 0
+            needsDisplay = true
             sendBytes([0x0C])   // Ctrl-L redraws the prompt
             return true
         case "=", "+": fontSize = min(20, fontSize + 1); return true
