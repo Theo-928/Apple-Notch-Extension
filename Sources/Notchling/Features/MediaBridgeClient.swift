@@ -81,9 +81,16 @@ final class MediaBridgeClient {
             guard !data.isEmpty else { return }
             DispatchQueue.main.async { self?.consume(data) }
         }
+        let launchedAt = Date()
         p.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
-                guard let self, self.wantsRunning, self.restarts < 3 else { return }
+                guard let self, self.wantsRunning else { return }
+                // Only crash loops count against the retry budget; a helper that
+                // ran fine for a while gets a fresh one. Otherwise a few unrelated
+                // crashes over days would stop Now Playing updates for good and
+                // leave the notch showing a stale play/pause state.
+                if Date().timeIntervalSince(launchedAt) > 30 { self.restarts = 0 }
+                guard self.restarts < 3 else { return }
                 self.restarts += 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.launch() }
             }

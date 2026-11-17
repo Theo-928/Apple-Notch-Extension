@@ -46,8 +46,21 @@ static NSString *constant(const char *sym, NSString *fallback) {
     return (p && *p) ? (__bridge NSString *)*p : fallback;
 }
 
+// NSJSONSerialization throws (and aborts the process) on NaN/Inf, which some
+// players report for duration/elapsed (live streams, videos still loading).
+static BOOL isFiniteNumber(id v) {
+    return [v isKindOfClass:NSNumber.class] && isfinite([(NSNumber *)v doubleValue]);
+}
+
 static void writeLine(NSDictionary *obj) {
-    NSData *json = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    if (![NSJSONSerialization isValidJSONObject:obj]) return;
+    NSData *json = nil;
+    @try {
+        json = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    } @catch (NSException *e) {
+        (void)e;
+        return;
+    }
     if (!json) return;
     fwrite(json.bytes, 1, json.length, stdout);
     fputc('\n', stdout);
@@ -63,10 +76,11 @@ static void emitNowPlaying(void) {
         if ((v = info[@"kMRMediaRemoteNowPlayingInfoTitle"]) && [v isKindOfClass:NSString.class]) out[@"title"] = v;
         if ((v = info[@"kMRMediaRemoteNowPlayingInfoArtist"]) && [v isKindOfClass:NSString.class]) out[@"artist"] = v;
         if ((v = info[@"kMRMediaRemoteNowPlayingInfoAlbum"]) && [v isKindOfClass:NSString.class]) out[@"album"] = v;
-        if ((v = info[@"kMRMediaRemoteNowPlayingInfoDuration"]) && [v isKindOfClass:NSNumber.class]) out[@"duration"] = v;
-        if ((v = info[@"kMRMediaRemoteNowPlayingInfoElapsedTime"]) && [v isKindOfClass:NSNumber.class]) out[@"elapsed"] = v;
-        if ((v = info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"]) && [v isKindOfClass:NSNumber.class]) out[@"rate"] = v;
-        if ((v = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"]) && [v isKindOfClass:NSDate.class])
+        if ((v = info[@"kMRMediaRemoteNowPlayingInfoDuration"]) && isFiniteNumber(v)) out[@"duration"] = v;
+        if ((v = info[@"kMRMediaRemoteNowPlayingInfoElapsedTime"]) && isFiniteNumber(v)) out[@"elapsed"] = v;
+        if ((v = info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"]) && isFiniteNumber(v)) out[@"rate"] = v;
+        if ((v = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"]) && [v isKindOfClass:NSDate.class]
+            && isfinite([(NSDate *)v timeIntervalSince1970]))
             out[@"timestamp"] = @([(NSDate *)v timeIntervalSince1970]);
         if ((v = info[@"kMRMediaRemoteNowPlayingInfoArtworkData"]) && [v isKindOfClass:NSData.class] && [(NSData *)v length] > 0)
             out[@"artwork"] = [(NSData *)v base64EncodedStringWithOptions:0];
