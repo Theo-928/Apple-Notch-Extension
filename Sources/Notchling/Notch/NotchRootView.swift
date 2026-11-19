@@ -111,7 +111,9 @@ struct NotchRootView: View {
                 .foregroundStyle(.orange)
                 .font(.system(size: 12, weight: .semibold))
         case .meeting:
-            Image(systemName: "video.fill").foregroundStyle(.green).font(.system(size: 12))
+            // A calendar glyph, not a camera: a green video icon reads as FaceTime
+            // and shows for every event, including ones without a call link.
+            Image(systemName: "calendar").foregroundStyle(.green).font(.system(size: 12, weight: .semibold))
         case .music:
             ArtworkView(image: media.artwork, fallbackIcon: media.sourceAppIcon, cornerRadius: 5)
                 .frame(width: vm.notchSize.height - 10, height: vm.notchSize.height - 10)
